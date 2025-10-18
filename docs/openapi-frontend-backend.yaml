@@ -1,0 +1,551 @@
+openapi: 3.0.3
+info:
+  title: RampAgent Frontend <> Backend API
+  version: 0.1.0
+  description: >
+    REST interface used by RampAgent web/mobile clients and merchant tooling to interact with
+    the RampAgent backend. Paths are grouped by functional domain; unless noted otherwise,
+    requests require a valid Bearer access token issued by the authentication service.
+servers:
+  - url: https://api.sandbox.rampagent.example
+    description: Sandbox environment (example)
+tags:
+  - name: Auth
+  - name: Mandates
+  - name: Recommendations
+  - name: Balance
+  - name: Payments
+  - name: Merchants
+paths:
+  /api/auth/google/exchange:
+    post:
+      tags: [Auth]
+      summary: Exchange Google ID token for RampAgent session
+      operationId: exchangeGoogleToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleExchangeRequest'
+      responses:
+        '200':
+          description: Authenticated session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid Google token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/mandates:
+    post:
+      tags: [Mandates]
+      summary: Create a payment mandate and register on-chain
+      operationId: createMandate
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MandateCreateRequest'
+      responses:
+        '201':
+          description: Mandate created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mandate'
+        '400':
+          description: Invalid mandate parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags: [Mandates]
+      summary: List mandates for the current user
+      operationId: listMandates
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Mandate collection
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Mandate'
+  /api/mandates/{mandateId}/revoke:
+    post:
+      tags: [Mandates]
+      summary: Revoke mandate permanently
+      operationId: revokeMandate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/MandateId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MandateStatusChangeRequest'
+      responses:
+        '200':
+          description: Mandate revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mandate'
+  /api/recommendations:
+    post:
+      tags: [Recommendations]
+      summary: Generate payment channel recommendations
+      operationId: createRecommendation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecommendationRequest'
+      responses:
+        '200':
+          description: Recommendation result bundle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationResponse'
+  /api/topup/mock:
+    post:
+      tags: [Balance]
+      summary: Simulate a top-up to the custodial balance
+      operationId: mockTopup
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopupRequest'
+      responses:
+        '200':
+          description: Updated balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceSummary'
+  /api/balance:
+    get:
+      tags: [Balance]
+      summary: Retrieve current USDC balance
+      operationId: getBalance
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Balance summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceSummary'
+  /api/agent/pay:
+    post:
+      tags: [Payments]
+      summary: Execute an agent payment using an active mandate
+      operationId: submitAgentPayment
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentPayRequest'
+      responses:
+        '200':
+          description: Payment accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '403':
+          description: Mandate inactive or constraints violated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /merchant/webhook:
+    post:
+      tags: [Merchants]
+      summary: Notify merchant backend about payment status
+      operationId: merchantWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentNotification'
+      responses:
+        '200':
+          description: Notification acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /merchant/payments/{paymentId}:
+    get:
+      tags: [Merchants]
+      summary: Retrieve payment status for merchant systems
+      operationId: getMerchantPayment
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentDetail'
+        '404':
+          description: Payment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    MandateId:
+      name: mandateId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    GoogleExchangeRequest:
+      type: object
+      required: [idToken]
+      properties:
+        idToken:
+          type: string
+          description: Google ID token obtained on the client
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserProfile'
+    UserProfile:
+      type: object
+      properties:
+        userId:
+          type: string
+        email:
+          type: string
+          format: email
+        walletAddress:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    MandateCreateRequest:
+      type: object
+      required:
+        - amountLimit
+        - validUntil
+        - merchantAllowlist
+      properties:
+        amountLimit:
+          type: string
+          pattern: '^[0-9]+(\.[0-9]+)?$'
+          description: Maximum aggregate USDC amount allowed during the mandate lifetime
+        validUntil:
+          type: string
+          format: date-time
+        merchantAllowlist:
+          type: array
+          items:
+            type: string
+          description: Merchant identifiers the mandate can pay
+        agentId:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+    MandateStatusChangeRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 256
+          nullable: true
+    Mandate:
+      type: object
+      properties:
+        mandateId:
+          type: string
+        paramsHash:
+          type: string
+        amountLimit:
+          type: string
+        usedAmount:
+          type: string
+        validUntil:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, paused, revoked]
+        merchantAllowlist:
+          type: array
+          items:
+            type: string
+        sessionKey:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    RecommendationRequest:
+      type: object
+      required:
+        - order
+        - quotes
+      properties:
+        order:
+          $ref: '#/components/schemas/OrderContext'
+        quotes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderQuote'
+        preferences:
+          $ref: '#/components/schemas/UserPreference'
+    OrderContext:
+      type: object
+      required:
+        - orderId
+        - merchantId
+        - amount
+        - currency
+      properties:
+        orderId:
+          type: string
+        merchantId:
+          type: string
+        amount:
+          type: string
+        currency:
+          type: string
+          example: USDC
+    ProviderQuote:
+      type: object
+      required:
+        - providerId
+      properties:
+        providerId:
+          type: string
+        feeBps:
+          type: integer
+          minimum: 0
+        estimatedArrivalSeconds:
+          type: integer
+          minimum: 0
+        successRate:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        metadata:
+          type: object
+          additionalProperties: true
+    UserPreference:
+      type: object
+      properties:
+        prioritizedFactors:
+          type: array
+          items:
+            type: string
+            enum: [fee, reliability, speed]
+        maxFeeBps:
+          type: integer
+          nullable: true
+        blockedProviders:
+          type: array
+          items:
+            type: string
+    RecommendationResponse:
+      type: object
+      properties:
+        primary:
+          $ref: '#/components/schemas/RecommendationOption'
+        alternatives:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationOption'
+        generatedAt:
+          type: string
+          format: date-time
+    RecommendationOption:
+      type: object
+      properties:
+        agentId:
+          type: string
+        providerId:
+          type: string
+        routeId:
+          type: string
+        totalCost:
+          type: string
+        expectedSuccessRate:
+          type: number
+          format: float
+        reasoning:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    TopupRequest:
+      type: object
+      required:
+        - amount
+      properties:
+        amount:
+          type: string
+          description: USDC amount to credit
+        providerId:
+          type: string
+          nullable: true
+    BalanceSummary:
+      type: object
+      properties:
+        asset:
+          type: string
+          example: USDC
+        available:
+          type: string
+        pending:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+    AgentPayRequest:
+      type: object
+      required:
+        - mandateId
+        - merchantId
+        - amount
+        - currency
+        - orderRef
+        - agentId
+      properties:
+        mandateId:
+          type: string
+        merchantId:
+          type: string
+        amount:
+          type: string
+        currency:
+          type: string
+          example: USDC
+        orderRef:
+          type: string
+        agentId:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    PaymentResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        status:
+          type: string
+          enum: [pending, success, failed]
+        txHash:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    PaymentNotification:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        merchantId:
+          type: string
+        status:
+          type: string
+          enum: [success, failed, pending]
+        amount:
+          type: string
+        currency:
+          type: string
+        signature:
+          type: string
+        sentAt:
+          type: string
+          format: date-time
+    PaymentDetail:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        merchantId:
+          type: string
+        userId:
+          type: string
+        amount:
+          type: string
+        currency:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        txHash:
+          type: string
+          nullable: true
+        agentId:
+          type: string
+          nullable: true
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string

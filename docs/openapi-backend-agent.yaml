@@ -1,0 +1,267 @@
+openapi: 3.0.3
+info:
+  title: RampAgent Backend <> Coze Agent API
+  version: 0.1.0
+  description: >
+    Specification for platform-managed agents (e.g. Coze-based) that receive recommendation
+    jobs from the RampAgent backend and respond with a single best route. All requests are
+    authenticated via an agent-specific API key passed in the `X-Agent-Key` header.
+servers:
+  - url: https://agents.sandbox.rampagent.example
+    description: Sandbox agent gateway (example)
+tags:
+  - name: Recommendations
+  - name: Health
+paths:
+  /v1/agents/{agentId}/recommendations:
+    post:
+      tags: [Recommendations]
+      summary: Submit a recommendation request to an agent
+      operationId: submitRecommendationJob
+      security:
+        - agentKey: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecommendationJob'
+      responses:
+        '200':
+          description: Agent recommendation payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRecommendation'
+        '202':
+          description: Job accepted for asynchronous processing
+        '400':
+          description: Invalid job payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid agent key
+  /v1/agents/{agentId}/health:
+    get:
+      tags: [Health]
+      summary: Simple heartbeat endpoint for monitoring
+      operationId: getAgentHealth
+      security:
+        - agentKey: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      responses:
+        '200':
+          description: Agent health information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+components:
+  securitySchemes:
+    agentKey:
+      type: apiKey
+      in: header
+      name: X-Agent-Key
+  parameters:
+    AgentId:
+      name: agentId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    RecommendationJob:
+      type: object
+      required:
+        - jobId
+        - order
+        - quotes
+      properties:
+        jobId:
+          type: string
+          description: Backend-generated identifier for idempotency
+        order:
+          $ref: '#/components/schemas/OrderContext'
+        quotes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderQuote'
+        userPreferences:
+          $ref: '#/components/schemas/UserPreferences'
+        historicalMetrics:
+          $ref: '#/components/schemas/HistoricalMetrics'
+        requestedAt:
+          type: string
+          format: date-time
+        responseTimeoutSeconds:
+          type: integer
+          minimum: 1
+    OrderContext:
+      type: object
+      required:
+        - orderId
+        - merchantId
+        - amount
+        - currency
+      properties:
+        orderId:
+          type: string
+        merchantId:
+          type: string
+        amount:
+          type: string
+        currency:
+          type: string
+          example: USDC
+        merchantMetadata:
+          type: object
+          additionalProperties: true
+    ProviderQuote:
+      type: object
+      required:
+        - providerId
+      properties:
+        providerId:
+          type: string
+        feeBps:
+          type: integer
+        estimatedArrivalSeconds:
+          type: integer
+        successRate:
+          type: number
+          format: float
+        liquidityScore:
+          type: number
+          format: float
+          nullable: true
+        rawPayload:
+          type: object
+          additionalProperties: true
+    UserPreferences:
+      type: object
+      properties:
+        prioritizedFactors:
+          type: array
+          items:
+            type: string
+            enum: [fee, reliability, speed]
+        maxFeeBps:
+          type: integer
+          nullable: true
+        preferredProviders:
+          type: array
+          items:
+            type: string
+        blockedProviders:
+          type: array
+          items:
+            type: string
+        notes:
+          type: string
+          nullable: true
+    HistoricalMetrics:
+      type: object
+      properties:
+        merchantRouteHistory:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteHistoryItem'
+        agentPerformanceSnapshot:
+          $ref: '#/components/schemas/AgentPerformance'
+    RouteHistoryItem:
+      type: object
+      properties:
+        providerId:
+          type: string
+        successRate:
+          type: number
+          format: float
+        avgLatencySeconds:
+          type: integer
+        sampleSize:
+          type: integer
+    AgentPerformance:
+      type: object
+      properties:
+        adoptionCount:
+          type: integer
+        totalAmount:
+          type: string
+        lastAdoptionAt:
+          type: string
+          format: date-time
+    AgentRecommendation:
+      type: object
+      required:
+        - jobId
+        - agentId
+        - recommendation
+      properties:
+        jobId:
+          type: string
+        agentId:
+          type: string
+        generatedAt:
+          type: string
+          format: date-time
+        ttlSeconds:
+          type: integer
+          description: Optional time-to-live for the recommendation
+        recommendation:
+          $ref: '#/components/schemas/RecommendationOption'
+        reasoning:
+          type: string
+        diagnostics:
+          type: object
+          additionalProperties: true
+    RecommendationOption:
+      type: object
+      required:
+        - providerId
+        - routeId
+      properties:
+        providerId:
+          type: string
+        routeId:
+          type: string
+        expectedFeeBps:
+          type: integer
+        expectedSuccessRate:
+          type: number
+          format: float
+        estimatedArrivalSeconds:
+          type: integer
+        notes:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+    HealthStatus:
+      type: object
+      properties:
+        agentId:
+          type: string
+        status:
+          type: string
+          enum: [healthy, degraded, down]
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: string
+        diagnostics:
+          type: object
+          additionalProperties: true
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string

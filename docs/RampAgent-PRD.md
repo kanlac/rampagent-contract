@@ -2,7 +2,7 @@
 
 > **目标**：跑通「（一次性支付）→ 可选配置 Agent →（复购时）Agent 代付 → 商户收款（链上分润 1%）」的最小闭环。  
 > **登录**：阶段一仅支持 **Google 登录**。  
-> **链上授权范围**：链上仅部署 **MandateRegistry**（保存 `paramsHash + active`）与 **PaymentManager**（校验授权 + 广播事件）；授权参数生成、风险控制、扣款编排仍由链下承担。  
+> **链上授权范围**：链上部署 **MandateRegistry**（保存 `paramsHash + active`）、**PaymentManager**（校验授权 + 广播事件）与 **AgentRegistry**（登记受控 Agent + 记录声誉）；授权参数生成、风险控制、扣款编排仍由链下承担。  
 > **平台分润**：商户 99% / 平台 **1%**。  
 > **资金前提**：**一次性支付可不充值**；**Agent 自动扣款必须先充值（USDC）**。
 
@@ -12,7 +12,7 @@
 
 - **C 端用户**：首单跳转支付；可选开启“Agent 自动支付”（额度/有效期/商户白名单），复购免跳转。  
 - **商户**：以 USDC 收款；分润链上可见；更高转化（推荐渠道）。  
-- **Agent（执行体）**：由用户授权的后台进程/脚本；通过 Session Key 调用 RampAgent API 自动支付。  
+- **Agent（执行体）**：由用户授权的后台进程/脚本；通过 Session Key 调用 RampAgent API 自动支付；推荐 Agent 由平台托管（Coze 等），按链上声誉排序后返回。  
 - **差异点**：**推荐支付渠道（Route Advisor）** —— 可用 **Agent（如 Coze）mock** 推荐结果与理由（费率/成功率/延迟）。
 
 ---
@@ -53,7 +53,7 @@
 （复购自动扣款）
 商户A后端 → /api/agent/pay
 → 校验：Mandate有效 + SessionKey有效 + 额度未超 + 商户在白名单 + 余额充足
-→ 记账/扣余额 → 合约：PaymentManager.validateAndRecord(mandateHash, merchant, amount, order_ref)（require MandateRegistry.active(paramsHash)）→ distribute(99:1)
+→ 记账/扣余额 → 合约：PaymentManager.validateAndRecord(mandateHash, merchant, amount, order_ref)（require MandateRegistry.active(paramsHash)）→ distribute(99:1) → PaymentManager.confirmAndRecord(payment_id, agent, amount)
 → 返回 payment_id → 商户端入账展示
 ```
 
@@ -67,6 +67,7 @@
 - **Route Advisor（Agent/Coze mock）**：  
   - 顶部**推荐渠道卡片**（理由=费率最低/成功率高/预计 N 秒）。  
   - 下方 0–2 个备选（列出差异）。  
+  - 后端整合所有托管 Agent（Coze）输出的方案，按链上声誉排序后返回。  
 - 登录：Google OAuth。  
 - 完成：第三方（或 mock）→ 回跳成功页 → 回跳商户。  
 - 引导：显著入口「配置 Agent（下次免跳转）」。
@@ -108,10 +109,12 @@
   - `POST /api/mandate`（`amount_limit, valid_until, merchant_allowlist[]`）→ 链下 EIP-712 签名、生成 `paramsHash`、持久化 → 调用链上 `MandateRegistry.register(paramsHash)`（默认 `active=true`）→ 颁发 Session Key。  
   - `POST /api/mandate/revoke` / `POST /api/mandate/pause`（如有）→ 调用 `MandateRegistry.setActive(paramsHash, false)` 并更新链下状态；`POST /api/mandate/resume`（如有）→ 调用 `setActive(..., true)`。  
   - `GET /api/mandate/list` 聚合链下字段与链上 `active` 状态。  
+- **Agent Recommendation**：  
+  - `POST /api/recommendation`（`order, quotes, preferences`）→ 后端收集所有 provider quote + 用户画像 → 依次调用托管 Coze Agent → 汇总推荐并按 `AgentRegistry` 声誉排序后返回「推荐 + 备选」。  
 - **Balance**：`POST /api/topup/mock`、`GET /api/balance`。  
 - **Agent Pay**：  
-  - `POST /api/agent/pay`（`mandate_id, merchant_id, amount, order_ref`）  
-  - 校验 Mandate/SessionKey/额度/白名单/余额 + `MandateRegistry.active(paramsHash)` → 记账/扣余额 → 合约：`PaymentManager.validateAndRecord(mandateHash, merchant, amount, order_ref)`（内部 require MandateRegistry 仍为 `active`，并发事件）→ 合约：`distribute` → 返回 `payment_id`。  
+  - `POST /api/agent/pay`（`mandate_id, merchant_id, amount, order_ref, agent`）  
+  - 校验 Mandate/SessionKey/额度/白名单/余额 + `MandateRegistry.active(paramsHash)` → 记账/扣余额 → 合约：`PaymentManager.validateAndRecord(mandateHash, merchant, amount, order_ref)`（内部 require MandateRegistry 仍为 `active`，并发事件）→ 合约：`distribute` → `PaymentManager.confirmAndRecord(payment_id, agent, amount)` → 返回 `payment_id`。  
 - **Merchant**：  
   - `POST /merchant/webhook`（RampAgent → 商户）  
   - `GET /merchant/payment/:payment_id`（商户轮询/WS）
@@ -122,6 +125,8 @@
 - `balances(user_id, asset=USDC, available, updated_at)`  
 - `mandates(mandate_id, user_id, agent_id, params_hash, merchant_allowlist(json), amount_limit, used_amount, valid_until, signature, status)`  
 - `session_keys(id, mandate_id, agent_id, valid_until, scope, status)`  
+- `agents(agent_address, name, metadata_uri, status, created_at)`  
+- `agent_reputation(agent_address, adoption_count, total_amount, last_payment_id, updated_at)`  
 - `payments(payment_id, user_id, merchant_id, amount, status, tx_hash?, created_at)`
 
 ### 3.3 安全与风控
@@ -152,13 +157,24 @@
   - `isActive(paramsHash)`：view 方法，供 PaymentManager 与链下调用方读取。  
 - 事件：`MandateRegistered`、`MandateActivated`、`MandateDeactivated`（携带 `block.timestamp`、触发地址）。
 
-### 4.2 PaymentManager（校验 + 事件）
+### 4.2 AgentRegistry（托管 Agent + 声誉）
+
+- 状态：`mapping(address agent => AgentProfile)`（含 `metadataURI`、`status`）与 `mapping(address agent => Reputation)`（`adoptionCount`、`totalAmount`、`lastPaymentId`、`lastUpdated`）。  
+- 函数：  
+  - `registerAgent(address agent, bytes calldata metadataURI)`：仅限平台脚本/运营调用；登记或更新受控 Agent。  
+  - `setStatus(address agent, AgentStatus status)`：开启/停用 Agent。  
+  - `getAgent(address agent)` / `getReputation(address agent)`：公开查询接口，供前端排序/展示。  
+  - `recordAdoption(address agent, uint256 paymentId, uint256 amount)`：仅限授权服务调用，支付成功后累计声誉与金额。  
+- 事件：`AgentRegistered`、`AgentStatusChanged`、`AgentAdoptionRecorded`。
+
+### 4.3 PaymentManager（校验 + 声誉回写）
 
 - `validateAndRecord(paramsHash, merchant, amount, orderRef)`：仅平台服务调用；`require MandateRegistry.isActive(paramsHash)`；可选地对 `orderRef` 做防重复；发 `PaymentValidated(paramsHash, merchant, amount, orderRef)`。  
 - `emitPaymentExecuted(paramsHash, merchant, amount, txRef)`（可与上函数合并）：在完成链下扣款与分润记账后调用，发 `PaymentExecuted(paramsHash, merchant, amount, txRef, block.timestamp)`。  
-- 所有写操作受 `onlyOwner/roles` 控制；PaymentManager 自身不记录余额，只负责校验与广播事件。
+- `confirmAndRecord(paymentId, address agent, uint256 amount)`：支付成功后由后端调用，内部确认订单闭环并调用 `AgentRegistry.recordAdoption`。  
+- 所有写操作受 `onlyOwner/roles` 控制；PaymentManager 自身不记录余额，只负责校验、事件和声誉写入。
 
-### 4.3 FeeDistributor（分润）
+### 4.4 FeeDistributor（分润）
 
 - `distribute(merchant, platform, amount)`  
 - **比例**：商户 99% / 平台 **1%**（配置项）
@@ -173,4 +189,5 @@
 - 能完成**配置 Agent**（生成/展示/暂停/撤销授权），并能在链上 `MandateRegistry` 看到注册/状态事件。  
 - **充值后**，Agent 可在授权与余额约束下**自动扣款**。  
 - `PaymentManager` 能校验 `MandateRegistry` 状态并发出 **PaymentValidated/PaymentExecuted** 事件，随后 `FeeDistributor` 完成**99:1 分润**；商户端能看到入账明细。  
+- `AgentRegistry` 可通过脚本注册受控 Agent，并在 `PaymentManager.confirmAndRecord` 后发出 `AgentAdoptionRecorded` 事件，声誉累计正确。  
 - 在撤销或余额不足等异常条件下，**自动扣款被拒**并有清晰错误提示。
